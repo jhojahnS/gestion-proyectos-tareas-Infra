@@ -25,8 +25,7 @@ Resources:
     Properties:
       GroupDescription: Security group for EC2 instance running the FastAPI
       GroupName: !Sub "${ProjectName}-api-sg"
-      VpcId: !ImportValue
-        "Fn::Sub": "${ProjectName}-VpcId"
+      VpcId: !ImportValue "gestion-proyectos-tareas-VpcId"
       SecurityGroupIngress:
         - Description: Allow HTTP traffic from internet
           IpProtocol: tcp
@@ -66,8 +65,7 @@ Resources:
     Properties:
       GroupDescription: Security group for PostgreSQL RDS database
       GroupName: !Sub "${ProjectName}-database-sg"
-      VpcId: !ImportValue
-        "Fn::Sub": "${ProjectName}-VpcId"
+      VpcId: !ImportValue "gestion-proyectos-tareas-VpcId"
       SecurityGroupIngress:
         - Description: Allow PostgreSQL access from EC2 only
           IpProtocol: tcp
