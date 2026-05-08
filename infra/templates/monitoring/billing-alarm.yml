@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudWatch billing alarms with SNS email notifications for the TFG project.
+  Deploy in us-east-1 to access global AWS billing metrics.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: gestion-proyectos-tareas
+    Description: Project name used to identify AWS resources
+
+  AlertEmail1:
+    Type: String
+    Default: "jhojahn@gmail.com"
+    Description: Primary email for billing alerts
+    AllowedPattern: "^[\\w.+-]+@[\\w-]+\\.[\\w.]+$"
+    ConstraintDescription: Must be a valid email address
+
+  AlertEmail2:
+    Type: String
+    Default: ""
+    Description: "Secondary email for billing alerts (optional, leave empty to disable)"
+
+  BillingThreshold:
+    Type: Number
+    Default: 1
+    Description: Configurable billing alarm threshold in USD
+
+Conditions:
+  HasEmail2: !Not [!Equals [!Ref AlertEmail2, ""]]
+
+Resources:
+  BillingAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-billing-alerts-topic"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  BillingAlertsSubscription1:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref BillingAlertsTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail1
+
+  BillingAlertsSubscription2:
+    Condition: HasEmail2
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref BillingAlertsTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail2
+
+  # Alarma configurable por parámetro
+  EstimatedChargesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-cost-alarm-${BillingThreshold}-usd"
+      AlarmDescription: !Sub "Alarm when estimated AWS charges exceed ${BillingThreshold} USD"
+      Namespace: AWS/Billing
+      MetricName: EstimatedCharges
+      Dimensions:
+        - Name: Currency
+          Value: USD
+      Statistic: Maximum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: !Ref BillingThreshold
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: missing
+      AlarmActions:
+        - !Ref BillingAlertsTopic
+      OKActions:
+        - !Ref BillingAlertsTopic
+
+  # Alarma fija a 5 USD
+  BillingAlarm5USD:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-cost-alarm-5-usd"
+      AlarmDescription: "Alarm when estimated AWS charges exceed 5 USD"
+      Namespace: AWS/Billing
+      MetricName: EstimatedCharges
+      Dimensions:
+        - Name: Currency
+          Value: USD
+      Statistic: Maximum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: missing
+      AlarmActions:
+        - !Ref BillingAlertsTopic
+      OKActions:
+        - !Ref BillingAlertsTopic
+
+  # Alarma fija a 20 USD
+  BillingAlarm20USD:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-cost-alarm-20-usd"
+      AlarmDescription: "Alarm when estimated AWS charges exceed 20 USD"
+      Namespace: AWS/Billing
+      MetricName: EstimatedCharges
+      Dimensions:
+        - Name: Currency
+          Value: USD
+      Statistic: Maximum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: 20
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: missing
+      AlarmActions:
+        - !Ref BillingAlertsTopic
+      OKActions:
+        - !Ref BillingAlertsTopic
+
+Outputs:
+  BillingAlertsTopicArn:
+    Description: SNS topic ARN for billing alerts
+    Value: !Ref BillingAlertsTopic
+
+  EstimatedChargesAlarmName:
+    Description: Name of the configurable billing alarm
+    Value: !Ref EstimatedChargesAlarm
+
+  BillingAlarm5USDName:
+    Description: Name of the 5 USD fixed billing alarm
+    Value: !Ref BillingAlarm5USD
+
+  BillingAlarm20USDName:
+    Description: Name of the 20 USD fixed billing alarm
+    Value: !Ref BillingAlarm20USD
+
