@@ -1,0 +1,122 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  PostgreSQL RDS database for Gestion de Proyectos y Tareas TFG project.
+  Depende de los stacks de VPC y Security Groups.
+  Importa subnets privadas y el Security Group de base de datos.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: gestion-proyectos-tareas
+    Description: Project name used to identify AWS resources
+
+  DBName:
+    Type: String
+    Default: gestiontareasdb
+    Description: Name of the PostgreSQL database
+
+  DBUsername:
+    Type: String
+    Default: postgresadmin
+    Description: Master username for the PostgreSQL instance
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Master password for the PostgreSQL instance (min 8 characters)
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    Description: RDS instance type
+
+  AllocatedStorage:
+    Type: Number
+    Default: 20
+    Description: Allocated storage size in GB
+
+Resources:
+
+  # ─────────────────────────────────────────────
+  # Subnet Group
+  # Usa las dos subredes privadas importadas desde
+  # el stack de VPC. RDS requiere mínimo 2 AZs.
+  # ─────────────────────────────────────────────
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub "${ProjectName}-db-subnet-group"
+      DBSubnetGroupDescription: Private subnet group for PostgreSQL RDS
+      SubnetIds:
+        - !ImportValue
+          "Fn::Sub": "${ProjectName}-PrivateSubnet1Id"
+        - !ImportValue
+          "Fn::Sub": "${ProjectName}-PrivateSubnet2Id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-db-subnet-group"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ─────────────────────────────────────────────
+  # RDS PostgreSQL Instance
+  # PubliclyAccessible: false → la instancia solo
+  # es accesible desde dentro de la VPC, concretamente
+  # desde el EC2 mediante el DatabaseSecurityGroup.
+  # El Security Group importado restringe el acceso
+  # al puerto 5432 únicamente desde el ApiSecurityGroup.
+  # ─────────────────────────────────────────────
+  PostgresDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub "${ProjectName}-postgres"
+      DBName: !Ref DBName
+      Engine: postgres
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref AllocatedStorage
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      # La instancia no tiene IP pública: solo accesible desde la VPC
+      PubliclyAccessible: false
+      MultiAZ: false
+      StorageEncrypted: true
+      BackupRetentionPeriod: 1
+      DeletionProtection: false
+      AutoMinorVersionUpgrade: true
+      # Security Group importado desde el stack de security-groups
+      VPCSecurityGroups:
+        - !ImportValue
+          "Fn::Sub": "${ProjectName}-DatabaseSecurityGroupId"
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-postgres"
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  DBInstanceIdentifier:
+    Description: RDS instance identifier
+    Value: !Ref PostgresDBInstance
+    Export:
+      Name: !Sub "${ProjectName}-DBInstanceIdentifier"
+
+  DBEndpointAddress:
+    Description: RDS endpoint address
+    Value: !GetAtt PostgresDBInstance.Endpoint.Address
+    Export:
+      Name: !Sub "${ProjectName}-DBEndpointAddress"
+
+  DBEndpointPort:
+    Description: RDS endpoint port
+    Value: !GetAtt PostgresDBInstance.Endpoint.Port
+    Export:
+      Name: !Sub "${ProjectName}-DBEndpointPort"
+
+  DBName:
+    Description: PostgreSQL database name
+    Value: !Ref DBName
+    Export:
+      Name: !Sub "${ProjectName}-DBName"
+
