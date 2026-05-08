@@ -1,6 +1,10 @@
 name: Infraestructura CI - Gestión de Proyectos y Tareas
 
 on:
+  pull_request:
+    branches:
+      - develop
+      - main
   workflow_dispatch:
 
 jobs:
@@ -174,9 +178,18 @@ jobs:
             --stack-name gestion-proyectos-tareas-security-groups \
             --parameter-overrides \
               ProjectName=gestion-proyectos-tareas \
-              AllowedSshCidr=${{ secrets.ALLOWED_SSH_CIDR }} \
+              AllowedSshCidr="${{ secrets.ALLOWED_SSH_CIDR || '0.0.0.0/0' }}" \
             --no-fail-on-empty-changeset \
             --region ${{ secrets.AWS_REGION }}
+
+      - name: Show stack events on failure
+        if: failure()
+        run: |
+          aws cloudformation describe-stack-events \
+            --stack-name gestion-proyectos-tareas-security-groups \
+            --region ${{ secrets.AWS_REGION }} \
+            --query "StackEvents[?ResourceStatus=='CREATE_FAILED' || ResourceStatus=='UPDATE_FAILED'].{Resource:LogicalResourceId,Reason:ResourceStatusReason}" \
+            --output table
 
       - name: Verify security groups stack status
         run: |
@@ -225,6 +238,15 @@ jobs:
               DBPassword=${{ secrets.DB_PASSWORD }} \
             --no-fail-on-empty-changeset \
             --region ${{ secrets.AWS_REGION }}
+
+      - name: Show RDS stack events on failure
+        if: failure()
+        run: |
+          aws cloudformation describe-stack-events \
+            --stack-name gestion-proyectos-tareas-rds \
+            --region ${{ secrets.AWS_REGION }} \
+            --query "StackEvents[?ResourceStatus=='CREATE_FAILED' || ResourceStatus=='UPDATE_FAILED'].{Resource:LogicalResourceId,Reason:ResourceStatusReason}" \
+            --output table
 
       - name: Verify RDS stack status
         run: |

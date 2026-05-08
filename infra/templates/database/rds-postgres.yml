@@ -17,7 +17,7 @@ Parameters:
 
   DBUsername:
     Type: String
-    Default: postgresadmin
+    Default: dbadmin
     Description: Master username for the PostgreSQL instance
 
   DBPassword:
@@ -49,10 +49,8 @@ Resources:
       DBSubnetGroupName: !Sub "${ProjectName}-db-subnet-group"
       DBSubnetGroupDescription: Private subnet group for PostgreSQL RDS
       SubnetIds:
-        - !ImportValue
-          "Fn::Sub": "${ProjectName}-PrivateSubnet1Id"
-        - !ImportValue
-          "Fn::Sub": "${ProjectName}-PrivateSubnet2Id"
+        - !ImportValue "gestion-proyectos-tareas-PrivateSubnet1Id"
+        - !ImportValue "gestion-proyectos-tareas-PrivateSubnet2Id"
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-db-subnet-group"
@@ -73,8 +71,10 @@ Resources:
       DBInstanceIdentifier: !Sub "${ProjectName}-postgres"
       DBName: !Ref DBName
       Engine: postgres
+      EngineVersion: "17"
       DBInstanceClass: !Ref DBInstanceClass
       AllocatedStorage: !Ref AllocatedStorage
+      StorageType: gp2
       MasterUsername: !Ref DBUsername
       MasterUserPassword: !Ref DBPassword
       # La instancia no tiene IP pública: solo accesible desde la VPC
@@ -86,8 +86,7 @@ Resources:
       AutoMinorVersionUpgrade: true
       # Security Group importado desde el stack de security-groups
       VPCSecurityGroups:
-        - !ImportValue
-          "Fn::Sub": "${ProjectName}-DatabaseSecurityGroupId"
+        - !ImportValue "gestion-proyectos-tareas-DatabaseSecurityGroupId"
       DBSubnetGroupName: !Ref DBSubnetGroup
       Tags:
         - Key: Name
