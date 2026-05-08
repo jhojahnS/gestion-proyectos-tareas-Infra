@@ -1,0 +1,99 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Security Groups para EC2 (FastAPI) y RDS (PostgreSQL).
+  Importa el VpcId desde el stack de VPC.
+  Proyecto: Gestión de Proyectos y Tareas - TFG.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: gestion-proyectos-tareas
+    Description: Project name used to identify AWS resources
+
+  AllowedSshCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR block allowed for SSH access. Restrict to your IP for better security.
+
+Resources:
+
+  # ─────────────────────────────────────────────
+  # Security Group - EC2 (API FastAPI)
+  # ─────────────────────────────────────────────
+  ApiSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for EC2 instance running the FastAPI
+      GroupName: !Sub "${ProjectName}-api-sg"
+      VpcId: !ImportValue
+        "Fn::Sub": "${ProjectName}-VpcId"
+      SecurityGroupIngress:
+        - Description: Allow HTTP traffic from internet
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - Description: Allow HTTPS traffic from internet
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - Description: FastAPI default port
+          IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: 0.0.0.0/0
+        - Description: SSH access - restrict to your IP in production
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSshCidr
+      SecurityGroupEgress:
+        - Description: Allow all outbound traffic
+          IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-api-sg"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ─────────────────────────────────────────────
+  # Security Group - RDS PostgreSQL
+  # ─────────────────────────────────────────────
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for PostgreSQL RDS database
+      GroupName: !Sub "${ProjectName}-database-sg"
+      VpcId: !ImportValue
+        "Fn::Sub": "${ProjectName}-VpcId"
+      SecurityGroupIngress:
+        - Description: Allow PostgreSQL access from EC2 only
+          IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref ApiSecurityGroup
+      SecurityGroupEgress:
+        - Description: Allow all outbound traffic
+          IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-database-sg"
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  ApiSecurityGroupId:
+    Description: Security Group ID for EC2 (FastAPI)
+    Value: !Ref ApiSecurityGroup
+    Export:
+      Name: !Sub "${ProjectName}-ApiSecurityGroupId"
+
+  DatabaseSecurityGroupId:
+    Description: Security Group ID for RDS PostgreSQL
+    Value: !Ref DatabaseSecurityGroup
+    Export:
+      Name: !Sub "${ProjectName}-DatabaseSecurityGroupId"
+
