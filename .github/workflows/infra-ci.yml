@@ -141,5 +141,52 @@ jobs:
             --query "Stacks[0].StackStatus" \
             --output text
 
+  # ─────────────────────────────────────────────
+  # JOB 4: RDS PostgreSQL
+  # Región principal: eu-west-1
+  # Depende de los Security Groups (importa DatabaseSecurityGroupId)
+  # ─────────────────────────────────────────────
+  deploy-rds:
+    name: Validate and Deploy RDS PostgreSQL Stack
+    runs-on: ubuntu-latest
+    needs: deploy-security-groups
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials for infrastructure
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Validate RDS template
+        run: |
+          aws cloudformation validate-template \
+            --template-body file://infra/templates/database/rds-postgres.yml \
+            --region ${{ secrets.AWS_REGION }}
+
+      - name: Deploy RDS stack
+        run: |
+          aws cloudformation deploy \
+            --template-file infra/templates/database/rds-postgres.yml \
+            --stack-name gestion-proyectos-tareas-rds \
+            --parameter-overrides \
+              ProjectName=gestion-proyectos-tareas \
+              DBName=${{ secrets.DB_NAME }} \
+              DBUsername=${{ secrets.DB_USERNAME }} \
+              DBPassword=${{ secrets.DB_PASSWORD }} \
+            --no-fail-on-empty-changeset \
+            --region ${{ secrets.AWS_REGION }}
+
+      - name: Verify RDS stack status
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name gestion-proyectos-tareas-rds \
+            --region ${{ secrets.AWS_REGION }} \
+            --query "Stacks[0].StackStatus" \
+            --output text
 
 
