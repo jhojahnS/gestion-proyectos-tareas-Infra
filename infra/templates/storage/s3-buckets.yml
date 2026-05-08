@@ -1,0 +1,100 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  S3 buckets for Gestion de Proyectos y Tareas TFG project.
+  Crea dos buckets privados: uno para scripts SQL de la base de datos
+  y otro para imágenes y archivos de usuario de la API FastAPI.
+  No depende de VPC, RDS ni Security Groups.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: gestion-proyectos-tareas
+    Description: Project name used to identify AWS resources
+
+Resources:
+
+  # ─────────────────────────────────────────────
+  # Bucket de scripts de base de datos
+  # Almacena: schema.sql, init.sql, seed.sql, migrations/
+  # GitHub Actions sube los scripts mediante un usuario IAM.
+  # Acceso exclusivamente privado, nunca público.
+  # ─────────────────────────────────────────────
+  DatabaseScriptsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-db-scripts-${AWS::AccountId}"
+      # Bloquear acceso público al bucket
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # Cifrado por defecto con AES256
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # Versionado habilitado para mantener historial de scripts
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-db-scripts"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ─────────────────────────────────────────────
+  # Bucket de imágenes y archivos de usuario
+  # Almacena archivos subidos por los usuarios a través de la API FastAPI.
+  # Acceso privado: la API accederá mediante permisos IAM
+  # o URLs prefirmadas (presigned URLs), nunca acceso público directo.
+  # ─────────────────────────────────────────────
+  UserImagesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-user-images-${AWS::AccountId}"
+      # Bloquear acceso público al bucket
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # Cifrado por defecto con AES256
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # Versionado habilitado para proteger archivos ante borrados accidentales
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-user-images"
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  DatabaseScriptsBucketName:
+    Description: Name of the S3 bucket for database scripts
+    Value: !Ref DatabaseScriptsBucket
+    Export:
+      Name: !Sub "${ProjectName}-DatabaseScriptsBucketName"
+
+  DatabaseScriptsBucketArn:
+    Description: ARN of the S3 bucket for database scripts
+    Value: !GetAtt DatabaseScriptsBucket.Arn
+    Export:
+      Name: !Sub "${ProjectName}-DatabaseScriptsBucketArn"
+
+  UserImagesBucketName:
+    Description: Name of the S3 bucket for user images and files
+    Value: !Ref UserImagesBucket
+    Export:
+      Name: !Sub "${ProjectName}-UserImagesBucketName"
+
+  UserImagesBucketArn:
+    Description: ARN of the S3 bucket for user images and files
+    Value: !GetAtt UserImagesBucket.Arn
+    Export:
+      Name: !Sub "${ProjectName}-UserImagesBucketArn"
+
