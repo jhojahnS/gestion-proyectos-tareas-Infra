@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   EC2 instance for FastAPI backend of Gestion de Proyectos y Tareas TFG project.
-  Importa subnet pública, Security Group y endpoints de RDS y S3 desde otros stacks.
-  No crea VPC, subnets, Security Groups, RDS ni buckets S3.
+  La API se ejecuta como contenedor Docker descargado desde Amazon ECR.
+  Importa subnet pública, Security Group, endpoints de RDS, S3 y ECR desde otros stacks.
 
 Parameters:
   ProjectName:
@@ -23,20 +23,36 @@ Parameters:
     Description: EC2 Key Pair name used to connect by SSH
 
   # AMI más reciente de Amazon Linux 2023 en eu-west-1 via SSM Parameter Store
-  # Se actualiza automáticamente con cada despliegue sin necesidad de hardcodear el ID
-  AmiId:
+  LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
     Description: Amazon Linux 2023 AMI ID from SSM Parameter Store
+
+  ImageTag:
+    Type: String
+    Default: latest
+    Description: Docker image tag to pull from ECR
+
+  DBUsername:
+    Type: String
+    Default: dbadmin
+    Description: Database username used by the API container
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: >
+      Database password used by the API container.
+      Mejora futura: gestionar con AWS Secrets Manager en lugar de parámetro.
 
 Resources:
 
   # ─────────────────────────────────────────────
   # IAM Role para el EC2
-  # Permite acceso a S3 (scripts y imágenes) y
-  # escritura de logs en CloudWatch.
-  # No incluye acceso a RDS directamente: la conexión
-  # se hace mediante credenciales en el archivo .env.
+  # Permisos necesarios para:
+  # - Hacer pull de imágenes Docker desde ECR
+  # - Acceder a los buckets S3 del proyecto
+  # - Escribir logs en CloudWatch
   # ─────────────────────────────────────────────
   ApiEC2Role:
     Type: AWS::IAM::Role
@@ -50,6 +66,22 @@ Resources:
               Service: ec2.amazonaws.com
             Action: sts:AssumeRole
       Policies:
+        - PolicyName: !Sub "${ProjectName}-ec2-ecr-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Pull de imágenes desde ECR
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: !ImportValue "gestion-proyectos-tareas-ApiECRRepositoryArn"
+
         - PolicyName: !Sub "${ProjectName}-ec2-s3-policy"
           PolicyDocument:
             Version: "2012-10-17"
@@ -60,12 +92,10 @@ Resources:
                   - s3:GetObject
                   - s3:ListBucket
                 Resource:
+                  - !ImportValue "gestion-proyectos-tareas-DatabaseScriptsBucketArn"
                   - !Sub
-                    - "arn:aws:s3:::${BucketName}"
-                    - BucketName: !ImportValue "gestion-proyectos-tareas-DatabaseScriptsBucketName"
-                  - !Sub
-                    - "arn:aws:s3:::${BucketName}/*"
-                    - BucketName: !ImportValue "gestion-proyectos-tareas-DatabaseScriptsBucketName"
+                    - "${BucketArn}/*"
+                    - BucketArn: !ImportValue "gestion-proyectos-tareas-DatabaseScriptsBucketArn"
               # Lectura y escritura del bucket de imágenes de usuario
               - Effect: Allow
                 Action:
@@ -74,23 +104,21 @@ Resources:
                   - s3:DeleteObject
                   - s3:ListBucket
                 Resource:
+                  - !ImportValue "gestion-proyectos-tareas-UserImagesBucketArn"
                   - !Sub
-                    - "arn:aws:s3:::${BucketName}"
-                    - BucketName: !ImportValue "gestion-proyectos-tareas-UserImagesBucketName"
-                  - !Sub
-                    - "arn:aws:s3:::${BucketName}/*"
-                    - BucketName: !ImportValue "gestion-proyectos-tareas-UserImagesBucketName"
+                    - "${BucketArn}/*"
+                    - BucketArn: !ImportValue "gestion-proyectos-tareas-UserImagesBucketArn"
+
         - PolicyName: !Sub "${ProjectName}-ec2-cloudwatch-policy"
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              # Escritura de logs y métricas en CloudWatch
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                  - cloudwatch:PutMetricData
+                  - logs:DescribeLogStreams
                 Resource: "*"
       Tags:
         - Key: Name
@@ -107,17 +135,18 @@ Resources:
 
   # ─────────────────────────────────────────────
   # Instancia EC2 - API FastAPI
-  # Se despliega en la subnet pública para que la app
-  # .NET MAUI pueda llamar a la API directamente desde
-  # internet sin necesidad de VPN ni Load Balancer.
-  # Usa el ApiSecurityGroup que permite tráfico en
-  # puertos 80, 443, 8000 y SSH en el 22.
+  # Está en la subnet pública para que la app .NET MAUI
+  # pueda llamar a la API directamente desde internet.
+  # La imagen Docker de la API se obtiene desde ECR,
+  # construida por el pipeline del repositorio backend.
+  # Las credenciales se pasan como variables de entorno
+  # al contenedor. Mejora futura: usar AWS Secrets Manager.
   # ─────────────────────────────────────────────
   ApiEC2Instance:
     Type: AWS::EC2::Instance
     Properties:
       InstanceType: !Ref InstanceType
-      ImageId: !Ref AmiId
+      ImageId: !Ref LatestAmiId
       # Subnet pública importada desde el stack de VPC
       SubnetId: !ImportValue "gestion-proyectos-tareas-PublicSubnetId"
       # Security Group importado desde el stack de security-groups
@@ -134,47 +163,53 @@ Resources:
             # Actualizar paquetes del sistema
             dnf update -y
 
-            # Instalar dependencias base
-            dnf install -y python3 python3-pip git
+            # Instalar Docker
+            dnf install -y docker
+            systemctl enable docker
+            systemctl start docker
 
-            # Crear directorio de la API
-            mkdir -p /opt/gestion-proyectos-tareas-api
+            # Añadir ec2-user al grupo docker para ejecutar sin sudo
+            usermod -aG docker ec2-user
 
-            # ─────────────────────────────────────────────
-            # Crear archivo .env inicial con configuración
-            # de conexión a RDS y S3.
-            # IMPORTANTE: DB_USER y DB_PASSWORD NO se incluyen
-            # aquí por seguridad. Deben inyectarse mediante:
-            # - AWS Secrets Manager en producción
-            # - El pipeline de despliegue de la API
-            # ─────────────────────────────────────────────
-            cat > /opt/gestion-proyectos-tareas-api/.env <<EOF
-            # Base de datos PostgreSQL (RDS)
-            DB_HOST=${DBHost}
-            DB_PORT=${DBPort}
-            DB_NAME=${DBName}
+            # Variables de entorno
+            REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+            ECR_REPOSITORY_URI="${ECRRepositoryUri}"
+            IMAGE="${ECRRepositoryUri}:${ImageTag}"
 
-            # Credenciales de BD: NO incluidas aquí por seguridad.
-            # Deben gestionarse mediante AWS Secrets Manager o el pipeline de la API.
-            DB_USER=
-            DB_PASSWORD=
+            # Login en ECR
+            aws ecr get-login-password --region $REGION | \
+              docker login --username AWS --password-stdin \
+              $(echo $ECR_REPOSITORY_URI | cut -d'/' -f1)
 
-            # S3 Bucket para imágenes de usuario
-            USER_IMAGES_BUCKET=${UserImagesBucket}
+            # Pull de la imagen de la API desde ECR
+            docker pull $IMAGE
 
-            # Región AWS
-            AWS_REGION=eu-west-1
-            EOF
+            # Detener y eliminar el contenedor anterior si existe
+            docker stop ${ProjectName}-api 2>/dev/null || true
+            docker rm ${ProjectName}-api 2>/dev/null || true
 
-            # Permisos del archivo .env
-            chmod 600 /opt/gestion-proyectos-tareas-api/.env
-            chown ec2-user:ec2-user /opt/gestion-proyectos-tareas-api/.env
+            # Ejecutar el contenedor de la API FastAPI en el puerto 8000
+            docker run -d \
+              --name ${ProjectName}-api \
+              --restart unless-stopped \
+              -p 8000:8000 \
+              -e DB_HOST="${DBHost}" \
+              -e DB_PORT="${DBPort}" \
+              -e DB_NAME="${DBName}" \
+              -e DB_USER="${DBUsername}" \
+              -e DB_PASSWORD="${DBPassword}" \
+              -e USER_IMAGES_BUCKET="${UserImagesBucket}" \
+              -e DATABASE_SCRIPTS_BUCKET="${DatabaseScriptsBucket}" \
+              -e AWS_REGION=$REGION \
+              $IMAGE
 
-            echo "EC2 UserData setup completed successfully"
-          - DBHost: !ImportValue "gestion-proyectos-tareas-DBEndpointAddress"
+            echo "API container started successfully"
+          - ECRRepositoryUri: !ImportValue "gestion-proyectos-tareas-ApiECRRepositoryUri"
+            DBHost: !ImportValue "gestion-proyectos-tareas-DBEndpointAddress"
             DBPort: !ImportValue "gestion-proyectos-tareas-DBEndpointPort"
             DBName: !ImportValue "gestion-proyectos-tareas-DBName"
             UserImagesBucket: !ImportValue "gestion-proyectos-tareas-UserImagesBucketName"
+            DatabaseScriptsBucket: !ImportValue "gestion-proyectos-tareas-DatabaseScriptsBucketName"
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-api-ec2"
