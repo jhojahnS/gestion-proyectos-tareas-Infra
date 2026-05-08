@@ -1,0 +1,56 @@
+name: Deploy Billing Alarm - Gestión de Proyectos y Tareas
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+jobs:
+  deploy-billing-alarm:
+    name: Validate and Deploy Billing Alarm Stack
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Validate billing alarm template
+        run: |
+          aws cloudformation validate-template \
+            --template-body file://infra/templates/monitoring/billing-alarm.yml \
+            --region us-east-1
+
+      - name: Deploy billing alarm stack
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+        run: |
+          aws cloudformation deploy \
+            --template-file infra/templates/monitoring/billing-alarm.yml \
+            --stack-name gestion-proyectos-tareas-billing-alarm \
+            --parameter-overrides \
+              ProjectName=gestion-proyectos-tareas \
+              AlertEmail1=${{ secrets.ALERT_EMAIL1 }} \
+              AlertEmail2="${{ secrets.ALERT_EMAIL2 }}" \
+              BillingThreshold=1 \
+            --no-fail-on-empty-changeset \
+            --region us-east-1
+
+      - name: Verify stack status
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name gestion-proyectos-tareas-billing-alarm \
+            --region us-east-1 \
+            --query "Stacks[0].StackStatus" \
+            --output text
+
+
+
