@@ -1,0 +1,90 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ECR repository for FastAPI backend Docker image.
+  Almacena la imagen Docker de la API FastAPI del proyecto Gestión de Proyectos y Tareas.
+  La imagen se construye desde el repositorio backend mediante GitHub Actions
+  y se descarga y ejecuta en el EC2 mediante Docker.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: gestion-proyectos-tareas
+    Description: Project name used to identify AWS resources
+
+Resources:
+
+  # ─────────────────────────────────────────────
+  # Repositorio ECR privado
+  # Almacena las imágenes Docker de la API FastAPI.
+  # GitHub Actions construye y sube la imagen desde
+  # el repositorio backend. El EC2 la descarga y
+  # la ejecuta con Docker en cada despliegue.
+  # ─────────────────────────────────────────────
+  ApiECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ProjectName}-api"
+      # Escaneo automático de vulnerabilidades al hacer push
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      # MUTABLE permite sobreescribir tags como 'latest'
+      ImageTagMutability: MUTABLE
+      # Política de ciclo de vida: mantiene solo las últimas 5 imágenes
+      # con tag para evitar acumulación y reducir costes de almacenamiento
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only the last 5 tagged images",
+                "selection": {
+                  "tagStatus": "tagged",
+                  "tagPrefixList": ["v", "latest", "release"],
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              },
+              {
+                "rulePriority": 2,
+                "description": "Remove untagged images older than 7 days",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 7
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-api"
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  ApiECRRepositoryName:
+    Description: ECR repository name for the FastAPI image
+    Value: !Ref ApiECRRepository
+    Export:
+      Name: !Sub "${ProjectName}-ApiECRRepositoryName"
+
+  ApiECRRepositoryArn:
+    Description: ECR repository ARN
+    Value: !GetAtt ApiECRRepository.Arn
+    Export:
+      Name: !Sub "${ProjectName}-ApiECRRepositoryArn"
+
+  ApiECRRepositoryUri:
+    Description: ECR repository URI used to push and pull Docker images
+    Value: !GetAtt ApiECRRepository.RepositoryUri
+    Export:
+      Name: !Sub "${ProjectName}-ApiECRRepositoryUri"
+
