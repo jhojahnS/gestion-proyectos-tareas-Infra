@@ -1,0 +1,202 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  EC2 instance for FastAPI backend of Gestion de Proyectos y Tareas TFG project.
+  Importa subnet pública, Security Group y endpoints de RDS y S3 desde otros stacks.
+  No crea VPC, subnets, Security Groups, RDS ni buckets S3.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: gestion-proyectos-tareas
+    Description: Project name used to identify AWS resources
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+    Description: EC2 instance type
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 Key Pair name used to connect by SSH
+
+  # AMI más reciente de Amazon Linux 2023 en eu-west-1 via SSM Parameter Store
+  # Se actualiza automáticamente con cada despliegue sin necesidad de hardcodear el ID
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Amazon Linux 2023 AMI ID from SSM Parameter Store
+
+Resources:
+
+  # ─────────────────────────────────────────────
+  # IAM Role para el EC2
+  # Permite acceso a S3 (scripts y imágenes) y
+  # escritura de logs en CloudWatch.
+  # No incluye acceso a RDS directamente: la conexión
+  # se hace mediante credenciales en el archivo .env.
+  # ─────────────────────────────────────────────
+  ApiEC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-ec2-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${ProjectName}-ec2-s3-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Lectura del bucket de scripts de base de datos
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub
+                    - "arn:aws:s3:::${BucketName}"
+                    - BucketName: !ImportValue "gestion-proyectos-tareas-DatabaseScriptsBucketName"
+                  - !Sub
+                    - "arn:aws:s3:::${BucketName}/*"
+                    - BucketName: !ImportValue "gestion-proyectos-tareas-DatabaseScriptsBucketName"
+              # Lectura y escritura del bucket de imágenes de usuario
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub
+                    - "arn:aws:s3:::${BucketName}"
+                    - BucketName: !ImportValue "gestion-proyectos-tareas-UserImagesBucketName"
+                  - !Sub
+                    - "arn:aws:s3:::${BucketName}/*"
+                    - BucketName: !ImportValue "gestion-proyectos-tareas-UserImagesBucketName"
+        - PolicyName: !Sub "${ProjectName}-ec2-cloudwatch-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Escritura de logs y métricas en CloudWatch
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-ec2-role"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  ApiEC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${ProjectName}-ec2-instance-profile"
+      Roles:
+        - !Ref ApiEC2Role
+
+  # ─────────────────────────────────────────────
+  # Instancia EC2 - API FastAPI
+  # Se despliega en la subnet pública para que la app
+  # .NET MAUI pueda llamar a la API directamente desde
+  # internet sin necesidad de VPN ni Load Balancer.
+  # Usa el ApiSecurityGroup que permite tráfico en
+  # puertos 80, 443, 8000 y SSH en el 22.
+  # ─────────────────────────────────────────────
+  ApiEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref AmiId
+      # Subnet pública importada desde el stack de VPC
+      SubnetId: !ImportValue "gestion-proyectos-tareas-PublicSubnetId"
+      # Security Group importado desde el stack de security-groups
+      SecurityGroupIds:
+        - !ImportValue "gestion-proyectos-tareas-ApiSecurityGroupId"
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref ApiEC2InstanceProfile
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -e
+
+            # Actualizar paquetes del sistema
+            dnf update -y
+
+            # Instalar dependencias base
+            dnf install -y python3 python3-pip git
+
+            # Crear directorio de la API
+            mkdir -p /opt/gestion-proyectos-tareas-api
+
+            # ─────────────────────────────────────────────
+            # Crear archivo .env inicial con configuración
+            # de conexión a RDS y S3.
+            # IMPORTANTE: DB_USER y DB_PASSWORD NO se incluyen
+            # aquí por seguridad. Deben inyectarse mediante:
+            # - AWS Secrets Manager en producción
+            # - El pipeline de despliegue de la API
+            # ─────────────────────────────────────────────
+            cat > /opt/gestion-proyectos-tareas-api/.env <<EOF
+            # Base de datos PostgreSQL (RDS)
+            DB_HOST=${DBHost}
+            DB_PORT=${DBPort}
+            DB_NAME=${DBName}
+
+            # Credenciales de BD: NO incluidas aquí por seguridad.
+            # Deben gestionarse mediante AWS Secrets Manager o el pipeline de la API.
+            DB_USER=
+            DB_PASSWORD=
+
+            # S3 Bucket para imágenes de usuario
+            USER_IMAGES_BUCKET=${UserImagesBucket}
+
+            # Región AWS
+            AWS_REGION=eu-west-1
+            EOF
+
+            # Permisos del archivo .env
+            chmod 600 /opt/gestion-proyectos-tareas-api/.env
+            chown ec2-user:ec2-user /opt/gestion-proyectos-tareas-api/.env
+
+            echo "EC2 UserData setup completed successfully"
+          - DBHost: !ImportValue "gestion-proyectos-tareas-DBEndpointAddress"
+            DBPort: !ImportValue "gestion-proyectos-tareas-DBEndpointPort"
+            DBName: !ImportValue "gestion-proyectos-tareas-DBName"
+            UserImagesBucket: !ImportValue "gestion-proyectos-tareas-UserImagesBucketName"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-api-ec2"
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  ApiEC2InstanceId:
+    Description: EC2 instance ID
+    Value: !Ref ApiEC2Instance
+    Export:
+      Name: !Sub "${ProjectName}-ApiEC2InstanceId"
+
+  ApiEC2PublicIp:
+    Description: EC2 public IP address
+    Value: !GetAtt ApiEC2Instance.PublicIp
+    Export:
+      Name: !Sub "${ProjectName}-ApiEC2PublicIp"
+
+  ApiEC2PublicDnsName:
+    Description: EC2 public DNS name
+    Value: !GetAtt ApiEC2Instance.PublicDnsName
+    Export:
+      Name: !Sub "${ProjectName}-ApiEC2PublicDnsName"
+
