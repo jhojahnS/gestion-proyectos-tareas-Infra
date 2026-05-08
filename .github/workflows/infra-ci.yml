@@ -30,7 +30,6 @@ jobs:
             --region us-east-1
 
       - name: Deploy billing alarm stack
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
         run: |
           aws cloudformation deploy \
             --template-file infra/templates/monitoring/billing-alarm.yml \
@@ -44,7 +43,6 @@ jobs:
             --region us-east-1
 
       - name: Verify stack status
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
         run: |
           aws cloudformation describe-stacks \
             --stack-name gestion-proyectos-tareas-billing-alarm \
