@@ -51,7 +51,52 @@ jobs:
             --output text
 
   # ─────────────────────────────────────────────
-  # JOB 2: VPC
+  # JOB 2: S3 Buckets
+  # Región principal: eu-west-1
+  # Independiente de VPC, corre en paralelo con deploy-vpc
+  # ─────────────────────────────────────────────
+  deploy-s3:
+    name: Validate and Deploy S3 Buckets Stack
+    runs-on: ubuntu-latest
+    needs: deploy-billing-alarm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials for infrastructure
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Validate S3 buckets template
+        run: |
+          aws cloudformation validate-template \
+            --template-body file://infra/templates/storage/s3-buckets.yml \
+            --region ${{ secrets.AWS_REGION }}
+
+      - name: Deploy S3 buckets stack
+        run: |
+          aws cloudformation deploy \
+            --template-file infra/templates/storage/s3-buckets.yml \
+            --stack-name gestion-proyectos-tareas-s3 \
+            --parameter-overrides \
+              ProjectName=gestion-proyectos-tareas \
+            --no-fail-on-empty-changeset \
+            --region ${{ secrets.AWS_REGION }}
+
+      - name: Verify S3 stack status
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name gestion-proyectos-tareas-s3 \
+            --region ${{ secrets.AWS_REGION }} \
+            --query "Stacks[0].StackStatus" \
+            --output text
+
+  # ─────────────────────────────────────────────
+  # JOB 3: VPC
   # Región principal: eu-west-1
   # Se ejecuta después del billing alarm
   # ─────────────────────────────────────────────
@@ -96,7 +141,7 @@ jobs:
             --output text
 
   # ─────────────────────────────────────────────
-  # JOB 3: Security Groups
+  # JOB 4: Security Groups
   # Región principal: eu-west-1
   # Depende de la VPC porque importa el VpcId
   # ─────────────────────────────────────────────
@@ -142,7 +187,7 @@ jobs:
             --output text
 
   # ─────────────────────────────────────────────
-  # JOB 4: RDS PostgreSQL
+  # JOB 5: RDS PostgreSQL
   # Región principal: eu-west-1
   # Depende de los Security Groups (importa DatabaseSecurityGroupId)
   # ─────────────────────────────────────────────
