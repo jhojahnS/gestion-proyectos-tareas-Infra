@@ -309,7 +309,7 @@ jobs:
   deploy-ec2:
     name: Validate and Deploy EC2 API Stack
     runs-on: ubuntu-latest
-    needs: [deploy-rds, deploy-s3]
+    needs: [deploy-rds, deploy-s3, deploy-ecr]
 
     steps:
       - name: Checkout repository
@@ -337,6 +337,9 @@ jobs:
               ProjectName=gestion-proyectos-tareas \
               InstanceType=t3.micro \
               KeyName=${{ secrets.EC2_KEY_NAME }} \
+              ImageTag=latest \
+              DBUsername=${{ secrets.DB_USERNAME }} \
+              DBPassword=${{ secrets.DB_PASSWORD }} \
             --capabilities CAPABILITY_NAMED_IAM \
             --no-fail-on-empty-changeset \
             --region ${{ secrets.AWS_REGION }}
